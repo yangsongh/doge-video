@@ -1,6 +1,6 @@
 # 全网首发 | 有道词典笔视频播放器小程序：Doge视频
 
-> 设备：有道词典笔 YDPX8-1（A7 Pro 级），OTA 4.61.0，Linux armv7l，936×280  
+> 设备：有道词典笔 YDPX8-1（X8），OTA 4.61.0，Linux armv7l，936×280  
 > 项目：**Doge视频**（本地视频启动器）  
 > 开源：https://github.com/yangsongh/doge-video  
 > 下载：https://github.com/yangsongh/doge-video/releases/latest
@@ -87,6 +87,8 @@ faststart
 所以项目里带了一个 Windows 图形转码工具，内置 ffmpeg，不需要用户装 Python，也不需要懂命令行：
 
 ![转码工具](https://raw.githubusercontent.com/yangsongh/doge-video/main/docs/gui.png)
+
+转码工具支持**硬件加速**：自动检测 Intel QSV / NVIDIA NVENC / AMD AMF，实际试开编码器；不可用时自动回退 `libx264`，单个文件硬件编码失败也会用软件重试。默认勾选，输出规格仍是 H.264 High / 960×540 / 15fps，不改变兼容性。
 
 ---
 
@@ -234,7 +236,7 @@ bash tools/install_to_device.sh ./8001145141919820.1_0_0.amr
 
 ## 已知限制
 
-- 只在 YDPX8-1 / 4.61.0 上验证；别的机型可能没有这个播放器 appid，或页面参数不同；
+- 只在 YDPX8-1（X8）/ 4.61.0 上验证；别的机型可能没有这个播放器 appid，或页面参数不同；
 - 系统播放器是私有 App，系统 OTA 后页面/参数可能变化；
 - 这是 sideload 小程序，不是官方上架应用；
 - 清理开关是测试开关，不是官方长期方案；

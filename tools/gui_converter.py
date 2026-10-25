@@ -32,6 +32,9 @@ FILTER = (
 )
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
+HW_ENCODERS = ("h264_qsv", "h264_nvenc", "h264_amf")
+_hw_cache = {}
+
 
 def resource_path(name):
     candidates = []
@@ -107,20 +110,76 @@ def probe_duration(ffmpeg, src):
         return None
 
 
-def convert_one(ffmpeg, src, dst, on_progress, stop_event):
-    cmd = [
-        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-        "-progress", "pipe:1", "-nostats",
-        "-i", str(src),
-        "-map", "0:v:0", "-map", "0:a:0?",
-        "-vf", FILTER,
-        "-c:v", "libx264",
+def detect_hw_encoder(ffmpeg):
+    """Return the first hardware H.264 encoder that can actually open, else None."""
+    key = str(ffmpeg)
+    if key in _hw_cache:
+        return _hw_cache[key]
+
+    try:
+        listed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=20, creationflags=CREATE_NO_WINDOW,
+        ).stdout or ""
+    except Exception:
+        _hw_cache[key] = None
+        return None
+
+    for encoder in HW_ENCODERS:
+        if encoder not in listed:
+            continue
+        test = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=960x540:r=15:d=0.5",
+            "-an", "-c:v", encoder,
+            "-profile:v", "high", "-level", "3.1", "-pix_fmt", "yuv420p",
+            "-b:v", "600k", "-maxrate", "800k", "-bufsize", "1600k",
+            "-f", "null", "-",
+        ]
+        try:
+            result = subprocess.run(
+                test, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=20, creationflags=CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                _hw_cache[key] = encoder
+                return encoder
+        except Exception:
+            pass
+
+    _hw_cache[key] = None
+    return None
+
+
+def encoder_options(encoder):
+    base = [
         "-profile:v", "high",
         "-level", "3.1",
         "-pix_fmt", "yuv420p",
         "-b:v", "600k",
         "-maxrate", "800k",
         "-bufsize", "1600k",
+    ]
+    if encoder == "h264_qsv":
+        return ["-c:v", encoder, "-preset", "medium"] + base
+    if encoder == "h264_nvenc":
+        return ["-c:v", encoder, "-preset", "p5", "-tune", "hq", "-rc", "vbr"] + base
+    if encoder == "h264_amf":
+        return ["-c:v", encoder, "-quality", "balanced", "-rc", "vbr_peak"] + base
+    return ["-c:v", "libx264", "-preset", "medium"] + base
+
+
+def build_command(ffmpeg, src, dst, encoder):
+    cmd = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-progress", "pipe:1", "-nostats",
+        "-i", str(src),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-vf", FILTER,
+    ]
+    cmd += encoder_options(encoder)
+    cmd += [
         "-c:a", "aac",
         "-b:a", "96k",
         "-ar", "44100",
@@ -129,10 +188,11 @@ def convert_one(ffmpeg, src, dst, on_progress, stop_event):
         "-shortest",
         str(dst),
     ]
+    return cmd
 
-    duration = probe_duration(ffmpeg, src)
+
+def run_ffmpeg(cmd, duration, on_progress, stop_event):
     errors = []
-
     try:
         proc = subprocess.Popen(
             cmd,
@@ -146,7 +206,7 @@ def convert_one(ffmpeg, src, dst, on_progress, stop_event):
             creationflags=CREATE_NO_WINDOW,
         )
     except Exception as exc:
-        return False, f"无法启动 ffmpeg：{exc}"
+        return 1, [f"无法启动 ffmpeg：{exc}"]
 
     for line in proc.stdout:
         if stop_event.is_set():
@@ -178,63 +238,45 @@ def convert_one(ffmpeg, src, dst, on_progress, stop_event):
 
     code = proc.wait()
     if stop_event.is_set():
-        return False, "已停止"
-    if code != 0:
-        detail = "\n".join(errors[-8:]) or f"ffmpeg 退出码 {code}"
-        return False, detail
-    return True, ""
+        return -1, ["已停止"]
+    return code, errors
 
 
-def push_to_device(files, output_dir):
-    adb = find_adb()
-    if not adb:
-        return False, "电脑上没有找到 adb。可以手动把转换后的文件复制到词典笔的 /userdisk/Favorite/Video。"
+def convert_one(ffmpeg, src, dst, on_progress, stop_event, hw_encoder=None):
+    duration = probe_duration(ffmpeg, src)
+    attempts = ([hw_encoder] if hw_encoder else []) + ["libx264"]
+    last_errors = []
 
-    try:
-        check = subprocess.run(
-            [adb, "devices"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=20, creationflags=CREATE_NO_WINDOW,
-        )
-        devices = [
-            line.split("\t")[0]
-            for line in (check.stdout or "").splitlines()
-            if "\tdevice" in line
-        ]
-        if not devices:
-            return False, "没有检测到词典笔。请连接 USB、打开 ADB，然后重试。"
-        subprocess.run(
-            [adb, "shell", "mkdir", "-p", DEVICE_DIR],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=20, creationflags=CREATE_NO_WINDOW,
-        )
-        for path in files:
-            path = Path(path)
-            # Push to an explicit destination file, not just a directory.
-            # Some adb versions mishandle a directory argument with a trailing
-            # slash and can drop the extension from the local filename.
-            name = path.name
-            if not name.lower().endswith(".mp4"):
-                name += ".mp4"
-            remote = DEVICE_DIR + "/" + name
-            result = subprocess.run(
-                [adb, "push", str(path), remote],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=120, creationflags=CREATE_NO_WINDOW,
-            )
-            if result.returncode != 0:
-                return False, f"推送失败：{name}\n{(result.stderr or result.stdout or '').strip()}"
-        return True, f"已推送到词典笔 {DEVICE_DIR}"
-    except Exception as exc:
-        return False, f"adb 推送失败：{exc}"
+    for index, encoder in enumerate(attempts):
+        if stop_event.is_set():
+            return False, "已停止"
+
+        cmd = build_command(ffmpeg, src, dst, encoder)
+        code, errors = run_ffmpeg(cmd, duration, on_progress, stop_event)
+        if code == 0:
+            if hw_encoder and index > 0:
+                return True, "libx264（硬件编码失败，已回退）"
+            return True, encoder
+
+        last_errors = errors or [f"ffmpeg 退出码 {code}"]
+        try:
+            if dst.exists():
+                dst.unlink()
+        except Exception:
+            pass
+        # Try software encoding after a hardware failure.
+        if encoder == "libx264":
+            break
+
+    return False, "\n".join(last_errors[-8:]) or "ffmpeg 失败"
 
 
 class ConverterApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("900x820")
-        self.root.minsize(760, 700)
+        self.root.geometry("900x850")
+        self.root.minsize(760, 720)
 
         self.input_files = []
         self.input_dir = None
@@ -305,6 +347,7 @@ class ConverterApp:
 
         self.push_var = tk.BooleanVar(value=bool(self.adb))
         self.open_var = tk.BooleanVar(value=True)
+        self.hw_var = tk.BooleanVar(value=True)
 
         self.push_check = ttk.Checkbutton(
             option_frame,
@@ -315,6 +358,12 @@ class ConverterApp:
         if not self.adb:
             self.push_check.state(["disabled"])
             self.push_var.set(False)
+
+        ttk.Checkbutton(
+            option_frame,
+            text="硬件加速（自动检测 NVENC/QSV/AMF，失败回退软件）",
+            variable=self.hw_var,
+        ).pack(anchor="w", pady=(2, 0))
 
         ttk.Checkbutton(
             option_frame,
@@ -442,15 +491,26 @@ class ConverterApp:
         self.log.configure(state="disabled")
         self.append_log(f"共 {len(files)} 个视频，输出到：{output}")
 
+        hw_enabled = self.hw_var.get()
         thread = threading.Thread(
-            target=self._worker, args=(files, output, ffmpeg), daemon=True
+            target=self._worker, args=(files, output, ffmpeg, hw_enabled), daemon=True
         )
         thread.start()
 
-    def _worker(self, files, output, ffmpeg):
+    def _worker(self, files, output, ffmpeg, hw_enabled):
         total = len(files)
         converted = []
         failed = []
+
+        hw_encoder = None
+        if hw_enabled:
+            hw_encoder = detect_hw_encoder(ffmpeg)
+            if hw_encoder:
+                self.queue.put(("log", "硬件加速：%s" % hw_encoder))
+            else:
+                self.queue.put(("log", "未检测到可用硬件编码器，使用 libx264"))
+        else:
+            self.queue.put(("log", "已关闭硬件加速，使用 libx264"))
 
         for index, src in enumerate(files, 1):
             if self.stop_event.is_set():
@@ -463,13 +523,13 @@ class ConverterApp:
                 value = ((index - 1) + max(0.0, min(1.0, fraction))) / total * 100
                 self.queue.put(("progress", value))
 
-            ok, error = convert_one(ffmpeg, src, dst, on_progress, self.stop_event)
+            ok, info = convert_one(ffmpeg, src, dst, on_progress, self.stop_event, hw_encoder)
             if self.stop_event.is_set():
                 break
 
             if ok:
                 converted.append(dst)
-                self.queue.put(("log", "  完成"))
+                self.queue.put(("log", "  完成（%s）" % info if info else "  完成"))
             else:
                 failed.append((src, error))
                 self.queue.put(("log", "  失败：" + error.replace("\n", " | ")))
@@ -555,7 +615,7 @@ class ConverterApp:
         self.root.destroy()
 
 
-def run_headless(input_path, output_path, ffmpeg):
+def run_headless(input_path, output_path, ffmpeg, hw_enabled=True):
     ffmpeg = ffmpeg or find_ffmpeg()
     src = Path(input_path)
     output = Path(output_path)
@@ -580,17 +640,19 @@ def run_headless(input_path, output_path, ffmpeg):
         say("no video files")
         return 1
 
+    hw_encoder = detect_hw_encoder(ffmpeg) if hw_enabled else None
+    say("hardware: " + (hw_encoder or "libx264 (software)"))
     stop_event = threading.Event()
     failed = 0
     for index, path in enumerate(files, 1):
         dst = output / f"{index:03d}_{safe_stem(path)}.mp4"
         say(f"[{index}/{len(files)}] {path.name} -> {dst.name}")
-        ok, error = convert_one(ffmpeg, path, dst, lambda fraction: None, stop_event)
+        ok, info = convert_one(ffmpeg, path, dst, lambda fraction: None, stop_event, hw_encoder)
         if ok:
-            say("  done")
+            say("  done (" + str(info) + ")")
         else:
             failed += 1
-            say("  failed: " + error)
+            say("  failed: " + info)
     say(f"finished: {len(files) - failed} ok, {failed} failed")
     return 0 if failed == 0 else 2
 
@@ -599,10 +661,11 @@ def main():
     parser = argparse.ArgumentParser(description=APP_TITLE)
     parser.add_argument("--headless", nargs=2, metavar=("INPUT", "OUTPUT"), help="no GUI, convert input to output")
     parser.add_argument("--ffmpeg", default=None, help="path to ffmpeg")
+    parser.add_argument("--no-hw", action="store_true", help="disable hardware acceleration in headless mode")
     args = parser.parse_args()
 
     if args.headless:
-        raise SystemExit(run_headless(args.headless[0], args.headless[1], args.ffmpeg))
+        raise SystemExit(run_headless(args.headless[0], args.headless[1], args.ffmpeg, not args.no_hw))
 
     if os.name == "nt":
         try:
