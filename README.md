@@ -6,6 +6,7 @@
 
 > 项目地址：https://github.com/yangsongh/doge-video  
 > 下载：https://github.com/yangsongh/doge-video/releases/latest
+> 社区文章：https://github.com/orgs/PenUniverse/discussions/319
 >
 > 本项目大部分分析、编码、调试和文档工作由 **DeepSeek Harness** 完成；从需求分析到可安装版本，API 成本约 **7 元人民币**。
 
