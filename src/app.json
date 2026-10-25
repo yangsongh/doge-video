@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "index": "pages/index/index.vue",
+    "help": "pages/help/help.vue",
+    "filemanager": "pages/filemanager/filemanager.vue",
+    "settings": "pages/settings/settings.vue"
+  }
+}

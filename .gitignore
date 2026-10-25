@@ -1,0 +1,7 @@
+node_modules/
+.falcon_/
+converted/
+*.amr
+gui_build/
+dist/
+__pycache__/

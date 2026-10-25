@@ -1,0 +1,22 @@
+{
+  "name": "Doge视频",
+  "appid": "8001145141919820",
+  "version": "1.0.0",
+  "description": "A local video launcher for DictPen OS",
+  "icon": "app_icon.png",
+  "quickjs": {
+    "version": "20200705",
+    "bigNum": false
+  },
+  "single-js-bundle": false,
+  "scripts": {
+    "build:prod": "aiot-cli -c -q -p",
+    "build:dev": "aiot-cli"
+  },
+  "keywords": [
+    "iot",
+    "miniapp",
+    "video"
+  ],
+  "dependencies": {}
+}
