@@ -211,7 +211,7 @@ adb shell "miniapp_cli install /userdisk/Favorite/8001145141919820.1_0_0.amr"
 
 1. 从 Releases 下载：
    - `8001145141919820.1_0_0.amr`
-   - `Doge视频转码工具.exe`
+   - `DogeVideoConverter.exe`
 2. 连接词典笔，确认 `adb devices` 能看到设备；
 3. 安装：
 

@@ -67,14 +67,14 @@ H.264 High / 960×540 / 15fps / yuv420p / AAC LC 44.1kHz stereo / faststart
 文件：
 
 ```text
-Doge视频转码工具.exe（从 Releases 下载）
+DogeVideoConverter.exe（从 Releases 下载）
 ```
 
 这是一个单文件 Windows 程序，**内置 ffmpeg**，用户不需要安装 Python、ffmpeg 或任何依赖。
 
 使用步骤：
 
-1. 双击 `Doge视频转码工具.exe`；
+1. 双击 `DogeVideoConverter.exe`；
 2. 选择视频文件，或选择整个文件夹（会递归查找视频）；
 3. 选择输出文件夹；
 4. 点「开始转换」；
